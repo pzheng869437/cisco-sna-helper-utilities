@@ -1,11 +1,14 @@
 # Egress Service Configuration CLI
 
 This standalone script remotely configures the Cisco Secure Network Analytics (SNA) Egress
-Service (`svc-ndr-adapter`), which runs on a Flow Collector (FC), by calling its REST API over
-HTTPS. Run this script from your own workstation or a jump host with network access to the
-FC — it does not need to be installed or run on the FC itself. It lets TAC engineers and
-customers check service health, view the enabled exporter, configure the syslog exporter, and
-reset configuration, without hand-building `curl` commands and managing cookies and XSRF tokens.
+Service (`svc-ndr-adapter`), which runs on a Flow Collector (FC) and exports flow data from the
+FC to external destinations such as syslog, Kafka, or Splunk. Run this script from your own
+workstation or a jump host with network access to the FC — it does not need to be installed or
+run on the FC itself. It lets TAC engineers and customers check service health, view the enabled
+flow export target, configure the syslog exporter, and reset configuration, without
+hand-building `curl` commands and managing cookies and XSRF tokens.
+
+This API was introduced in SNA 7.6.1.
 
 ## Requirements
 
@@ -41,8 +44,10 @@ export SVC_NDR_ADAPTER_FC=10.0.0.1,10.0.0.2,10.0.0.3
 
 To use another credential source, replace the `get_credentials` function.
 
-Most FCs use self-signed certificates. Pass `--disable-tls-verify` to skip TLS certificate
-validation in that case.
+Most FCs use self-signed certificates. If your client does not trust the FC certificate chain,
+add the FC CA or leaf certificate to the local trust store on the workstation or jump host that
+runs this script. As a fallback, pass `--disable-tls-verify` to skip TLS certificate validation
+for that run only.
 
 If you do not set `SVC_NDR_ADAPTER_USERNAME` or `SVC_NDR_ADAPTER_PASSWORD`, the script
 prompts for them interactively (the password prompt does not echo input).
@@ -230,8 +235,8 @@ HTTP 200
 | `syslog` | `format` | `csv` or `json` |
 
 The `configure` command also accepts values for the `flow_adapter`, `csv`, `kafka`,
-`splunk`, `logging`, and `monitoring` sections. Refer to the
-[API configuration guide](../../docs/API-guide.md) for the complete list.
+`splunk`, `logging`, and `monitoring` sections. Refer to the Egress Service API
+documentation included with your SNA release for the complete list.
 
 ## Scripting
 
@@ -267,7 +272,7 @@ Service API.
 ### 400 Invalid configuration request
 
 Confirm the section, key, and value are supported. Use the supported values table above
-and the [API configuration guide](../../docs/API-guide.md) for reference.
+and the Egress Service API documentation included with your SNA release for reference.
 
 ### No flow records received by syslog
 

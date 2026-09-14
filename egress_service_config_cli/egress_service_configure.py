@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional, Tuple
 DEFAULT_TIMEOUT_SECONDS = 30
 AUTHENTICATE_PATH = "/token/v2/authenticate"
 SERVICE_ROUTE = "/svc-ndr-adapter"
+XSRF_COOKIE_NAME = "XSRF-TOKEN"
 
 
 class ApiError(Exception):
@@ -37,19 +38,16 @@ class ApiError(Exception):
 class ApiResponse:
     """Lightweight response wrapper matching what the command functions expect."""
 
-    def __init__(self, status_code, body):
-        # type: (int, str) -> None
+    def __init__(self, status_code: int, body: str) -> None:
         self.status_code = status_code
         self.body = body
         self.ok = 200 <= status_code < 300
 
-    def json(self):
-        # type: () -> Any
+    def json(self) -> Any:
         return json.loads(self.body)
 
 
-def build_ssl_context(verify):
-    # type: (bool) -> ssl.SSLContext
+def build_ssl_context(verify: bool) -> ssl.SSLContext:
     """Return an SSL context that either verifies certs or skips verification."""
     if verify:
         return ssl.create_default_context()
@@ -59,8 +57,7 @@ def build_ssl_context(verify):
     return ctx
 
 
-def get_credentials(args):
-    # type: (argparse.Namespace) -> Tuple[str, str]
+def get_credentials(args: argparse.Namespace) -> Tuple[str, str]:
     """Return (username, password), preferring CLI args, then env vars, then a prompt."""
     username = args.username or os.environ.get("SVC_NDR_ADAPTER_USERNAME")
     if not username:
@@ -73,8 +70,13 @@ def get_credentials(args):
     return username, password
 
 
-def authenticate(cookie_jar, fc, username, password, ssl_context):
-    # type: (http.cookiejar.CookieJar, str, str, str, ssl.SSLContext) -> str
+def authenticate(
+    cookie_jar: http.cookiejar.CookieJar,
+    fc: str,
+    username: str,
+    password: str,
+    ssl_context: ssl.SSLContext,
+) -> str:
     """Log in to the FC and return the XSRF token."""
     url = "https://{}{}".format(fc, AUTHENTICATE_PATH)
     data = urllib.parse.urlencode({"username": username, "password": password}).encode("utf-8")
@@ -91,17 +93,15 @@ def authenticate(cookie_jar, fc, username, password, ssl_context):
     except urllib.error.URLError as exc:
         raise ApiError("Cannot reach FC at {}: {}".format(fc, exc.reason))
 
-    # Extract XSRF token from cookies
     token = None
     for cookie in cookie_jar:
-        if "XSRF" in cookie.name.upper() or "TOKEN" in cookie.name.upper():
+        if cookie.name == XSRF_COOKIE_NAME:
             token = cookie.value
             break
 
     if not token:
-        # Fall back to parsing Set-Cookie headers
         for header_value in response.headers.get_all("Set-Cookie") or []:
-            match = re.search(r"TOKEN=([^;]*)", header_value)
+            match = re.search(r"XSRF-TOKEN=([^;]*)", header_value)
             if match:
                 token = match.group(1)
                 break
@@ -112,8 +112,15 @@ def authenticate(cookie_jar, fc, username, password, ssl_context):
     return token
 
 
-def call_api(cookie_jar, fc, xsrf_token, method, path, ssl_context, json_body=None):
-    # type: (http.cookiejar.CookieJar, str, str, str, str, ssl.SSLContext, Optional[Dict[str, Any]]) -> ApiResponse
+def call_api(
+    cookie_jar: http.cookiejar.CookieJar,
+    fc: str,
+    xsrf_token: str,
+    method: str,
+    path: str,
+    ssl_context: ssl.SSLContext,
+    json_body: Optional[Dict[str, Any]] = None,
+) -> ApiResponse:
     """Make an authenticated request to the Egress Service API."""
     url = "https://{}{}{}".format(fc, SERVICE_ROUTE, path)
 
@@ -141,8 +148,7 @@ def call_api(cookie_jar, fc, xsrf_token, method, path, ssl_context, json_body=No
         raise ApiError("Cannot reach FC at {}: {}".format(fc, exc.reason))
 
 
-def print_response(response, quiet=False):
-    # type: (ApiResponse, bool) -> None
+def print_response(response: ApiResponse, quiet: bool = False) -> None:
     """Print the HTTP status and formatted JSON response."""
     if quiet:
         if not response.ok:
@@ -156,8 +162,7 @@ def print_response(response, quiet=False):
         print(response.body)
 
 
-def parse_set_option(raw):
-    # type: (str) -> Tuple[str, str, str]
+def parse_set_option(raw: str) -> Tuple[str, str, str]:
     """Parse a 'section.key=value' string into (section, key, value)."""
     try:
         path, value = raw.split("=", 1)
@@ -175,45 +180,67 @@ def parse_set_option(raw):
     return section, key, value
 
 
-def build_updates(set_options):
-    # type: (List[Tuple[str, str, str]]) -> Dict[str, Dict[str, str]]
+def build_updates(set_options: List[Tuple[str, str, str]]) -> Dict[str, Dict[str, str]]:
     """Group --set options into an updates dict keyed by section."""
-    updates = {}  # type: Dict[str, Dict[str, str]]
+    updates: Dict[str, Dict[str, str]] = {}
     for section, key, value in set_options:
         updates.setdefault(section, {})[key] = value
     return updates
 
 
-def cmd_health_check(cookie_jar, fc, xsrf_token, ssl_context, args):
-    # type: (http.cookiejar.CookieJar, str, str, ssl.SSLContext, argparse.Namespace) -> int
+def cmd_health_check(
+    cookie_jar: http.cookiejar.CookieJar,
+    fc: str,
+    xsrf_token: str,
+    ssl_context: ssl.SSLContext,
+    args: argparse.Namespace,
+) -> int:
     """Check Egress Service health."""
     response = call_api(cookie_jar, fc, xsrf_token, "GET", "/health-check", ssl_context)
     print_response(response, quiet=args.quiet)
     return 0 if response.ok else 1
 
 
-def cmd_status(cookie_jar, fc, xsrf_token, ssl_context, args):
-    # type: (http.cookiejar.CookieJar, str, str, ssl.SSLContext, argparse.Namespace) -> int
+def cmd_status(
+    cookie_jar: http.cookiejar.CookieJar,
+    fc: str,
+    xsrf_token: str,
+    ssl_context: ssl.SSLContext,
+    args: argparse.Namespace,
+) -> int:
     """Show the currently enabled exporter."""
     response = call_api(cookie_jar, fc, xsrf_token, "GET", "/api/v1/config", ssl_context)
     print_response(response, quiet=args.quiet)
     return 0 if response.ok else 1
 
 
-def cmd_configure(cookie_jar, fc, xsrf_token, ssl_context, args):
-    # type: (http.cookiejar.CookieJar, str, str, ssl.SSLContext, argparse.Namespace) -> int
+def cmd_configure(
+    cookie_jar: http.cookiejar.CookieJar,
+    fc: str,
+    xsrf_token: str,
+    ssl_context: ssl.SSLContext,
+    args: argparse.Namespace,
+) -> int:
     """Set one or more configuration values."""
     updates = build_updates(args.set)
-    response = call_api(cookie_jar, fc, xsrf_token, "PATCH", "/api/v1/config", ssl_context, json_body={"updates": updates})
+    response = call_api(
+        cookie_jar, fc, xsrf_token, "PATCH", "/api/v1/config", ssl_context,
+        json_body={"updates": updates},
+    )
     print_response(response, quiet=args.quiet)
     return 0 if response.ok else 1
 
 
-def cmd_configure_syslog(cookie_jar, fc, xsrf_token, ssl_context, args):
-    # type: (http.cookiejar.CookieJar, str, str, ssl.SSLContext, argparse.Namespace) -> int
+def cmd_configure_syslog(
+    cookie_jar: http.cookiejar.CookieJar,
+    fc: str,
+    xsrf_token: str,
+    ssl_context: ssl.SSLContext,
+    args: argparse.Namespace,
+) -> int:
     """Configure the syslog exporter."""
-    syslog_updates = {}  # type: Dict[str, str]
-    updates = {}  # type: Dict[str, Dict[str, str]]
+    syslog_updates: Dict[str, str] = {}
+    updates: Dict[str, Dict[str, str]] = {}
     if args.destinations:
         syslog_updates["destinations"] = args.destinations
     if args.format:
@@ -223,11 +250,19 @@ def cmd_configure_syslog(cookie_jar, fc, xsrf_token, ssl_context, args):
         updates["flow_adapter"] = {"enabled_exporters": "syslog"}
     if args.disable:
         syslog_updates["enabled"] = "false"
-        updates["flow_adapter"] = {"enabled_exporters": ""}
-
-    if not syslog_updates:
-        print("Nothing to do: provide --destinations, --format, --enable, or --disable", file=sys.stderr)
-        return 2
+        # Only clear enabled_exporters if syslog is the active exporter,
+        # to avoid disabling a different exporter type.
+        should_clear = True
+        status_resp = call_api(cookie_jar, fc, xsrf_token, "GET", "/api/v1/config", ssl_context)
+        if status_resp.ok:
+            try:
+                enabled = status_resp.json().get("enabled_exporter")
+                if enabled is not None and enabled != "syslog":
+                    should_clear = False
+            except (ValueError, KeyError):
+                pass
+        if should_clear:
+            updates["flow_adapter"] = {"enabled_exporters": ""}
 
     updates["syslog"] = syslog_updates
     response = call_api(
@@ -238,14 +273,16 @@ def cmd_configure_syslog(cookie_jar, fc, xsrf_token, ssl_context, args):
     return 0 if response.ok else 1
 
 
-def cmd_reset(cookie_jar, fc, xsrf_token, ssl_context, args):
-    # type: (http.cookiejar.CookieJar, str, str, ssl.SSLContext, argparse.Namespace) -> int
+def cmd_reset(
+    cookie_jar: http.cookiejar.CookieJar,
+    fc: str,
+    xsrf_token: str,
+    ssl_context: ssl.SSLContext,
+    args: argparse.Namespace,
+) -> int:
     """Reset the enabled exporter or a specific section/key."""
-    body = {}  # type: Dict[str, Any]
-    if args.section or args.key:
-        if not (args.section and args.key):
-            print("Both --section and --key are required together", file=sys.stderr)
-            return 2
+    body: Dict[str, Any] = {}
+    if args.section and args.key:
         body = {"section": args.section, "key": args.key}
 
     response = call_api(cookie_jar, fc, xsrf_token, "POST", "/api/v1/config/reset", ssl_context, json_body=body)
@@ -253,16 +290,19 @@ def cmd_reset(cookie_jar, fc, xsrf_token, ssl_context, args):
     return 0 if response.ok else 1
 
 
-def build_parser():
-    # type: () -> argparse.ArgumentParser
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Configure the Cisco SNA Egress Service (svc-ndr-adapter) on one or more FCs over its REST API.",
-        epilog="Environment variables: SVC_NDR_ADAPTER_FC, SVC_NDR_ADAPTER_USERNAME, SVC_NDR_ADAPTER_PASSWORD",
+        epilog=(
+            "Environment variables: SVC_NDR_ADAPTER_FC, SVC_NDR_ADAPTER_USERNAME, SVC_NDR_ADAPTER_PASSWORD. "
+            "CLI arguments take precedence over environment variables."
+        ),
     )
     parser.add_argument("--fc", action="append",
                         help="FC IP or hostname. Can be repeated (--fc 10.0.0.1 --fc 10.0.0.2) "
                              "or comma-separated (--fc 10.0.0.1,10.0.0.2). "
-                             "Also reads SVC_NDR_ADAPTER_FC env var.")
+                             "Also reads SVC_NDR_ADAPTER_FC env var. "
+                             "CLI values take precedence over the env var.")
     parser.add_argument("--username", help="FC admin username (or set SVC_NDR_ADAPTER_USERNAME)")
     parser.add_argument("--password", help="FC admin password (or set SVC_NDR_ADAPTER_PASSWORD)")
     parser.add_argument(
@@ -317,15 +357,32 @@ def build_parser():
     return parser
 
 
-def resolve_fc_list(args):
-    # type: (argparse.Namespace) -> List[str]
-    """Build the list of FC targets from --fc args and the environment variable."""
-    raw_values = args.fc or []
-    env_value = os.environ.get("SVC_NDR_ADAPTER_FC", "")
-    if env_value and not raw_values:
-        raw_values = [env_value]
+def validate_command_args(args: argparse.Namespace) -> Optional[str]:
+    """Validate command-specific arguments before authentication.
 
-    fc_list = []
+    Returns an error message if validation fails, or None if valid.
+    """
+    if args.command == "reset" and (args.section or args.key):
+        if not (args.section and args.key):
+            return "Both --section and --key are required together"
+    if args.command == "syslog":
+        if not (args.destinations or args.format or args.enable or args.disable):
+            return "Nothing to do: provide --destinations, --format, --enable, or --disable"
+    return None
+
+
+def resolve_fc_list(args: argparse.Namespace) -> List[str]:
+    """Build the list of FC targets from --fc args and the environment variable.
+
+    CLI --fc values take precedence; the SVC_NDR_ADAPTER_FC env var is only
+    used when no --fc arguments are provided.
+    """
+    raw_values = args.fc or []
+    if not raw_values:
+        if env_value := os.environ.get("SVC_NDR_ADAPTER_FC", ""):
+            raw_values = [env_value]
+
+    fc_list: List[str] = []
     for raw in raw_values:
         for entry in raw.split(","):
             entry = entry.strip()
@@ -334,10 +391,14 @@ def resolve_fc_list(args):
     return fc_list
 
 
-def main():
-    # type: () -> int
+def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+
+    error = validate_command_args(args)
+    if error:
+        print(error, file=sys.stderr)
+        return 2
 
     fc_list = resolve_fc_list(args)
     if not fc_list:
